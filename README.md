@@ -1,1 +1,1 @@
-# Sentinel — AI Assistant for Active Directory Operations
+# Sentinel - AI Assistant for Active Directory Operations
