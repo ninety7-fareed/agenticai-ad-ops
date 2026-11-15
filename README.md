@@ -1,1 +1,1 @@
-# Sentinel - AI Assistant for Active Directory Operations
+# ADPilot - Agentic AI for Active Directory Operations
