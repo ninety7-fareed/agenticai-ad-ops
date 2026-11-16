@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+adpilot.json
 secrets/
 credentials/
 *.key
