@@ -14,7 +14,7 @@ from ad_directory import (
     ActiveDirectoryDirectory,
     run_powershell,
 )
-from main import TOOLS, AuditedDirectory, DemoDirectory, build_directory
+from main import DEFAULT_AUDIT_LOG, TOOLS, AuditedDirectory, DemoDirectory, build_directory
 
 
 OU = "OU=AgenticAI-AD-OPs-test,DC=ninety7,DC=local"
@@ -203,6 +203,7 @@ class DirectorySelectionTests(unittest.TestCase):
         self.assertIsInstance(selected.directory, DemoDirectory)
         self.assertIs(selected.tools, TOOLS)
         self.assertIn("Fictional directory only", selected.banner)
+        self.assertEqual(selected.log_path, DEFAULT_AUDIT_LOG)
 
     def test_ad_backend_targets_lab01_and_the_test_ou(self):
         selected = build_directory({"ADPILOT_DIRECTORY": "ad"})

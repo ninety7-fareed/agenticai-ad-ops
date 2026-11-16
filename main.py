@@ -328,6 +328,7 @@ class AuditedDirectory:
 
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "adpilot.json")
+DEFAULT_AUDIT_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.log")
 CONFIG_KEYS = {
     "directory": "ADPILOT_DIRECTORY",
     "dc": "ADPILOT_DC",
@@ -392,7 +393,7 @@ def build_directory(environ=None, config_path=None):
     if environ is None:
         environ = runtime_settings(CONFIG_PATH if config_path is None else config_path)
     backend = environ.get("ADPILOT_DIRECTORY", "demo").strip().casefold()
-    log_path = environ.get("ADPILOT_AUDIT_LOG", "audit.log")
+    log_path = environ.get("ADPILOT_AUDIT_LOG", DEFAULT_AUDIT_LOG)
     if backend == "demo":
         return AuditedDirectory(DemoDirectory(), log_path, DEMO_BANNER, INSTRUCTIONS, TOOLS)
     if backend != "ad":

@@ -1,4 +1,4 @@
-"""Private ADPilot chat. Runs on LAB02 and stays up after logoff."""
+"""Private ADPilot chat. On LAB02 the Windows service keeps it running after logoff."""
 
 import json
 import os
@@ -172,7 +172,8 @@ def make_handler(session):
     return Handler
 
 
-def serve(config_path=None):
+def open_server(config_path=None):
+    """Create the listening chat server. The caller decides how long it runs."""
     path = config_path or os.environ.get("ADPILOT_CONFIG", CONFIG_PATH)
     ensure_config(path)
     directory = build_directory(config_path=path)
@@ -183,7 +184,11 @@ def serve(config_path=None):
     server = ThreadingHTTPServer((host, port), make_handler(session))
     log("ADPilot listening on http://{0}:{1}".format(host, port))
     print("ADPilot listening on http://{0}:{1}".format(host, port))
-    server.serve_forever()
+    return server
+
+
+def serve(config_path=None):
+    open_server(config_path).serve_forever()
 
 
 if __name__ == "__main__":
