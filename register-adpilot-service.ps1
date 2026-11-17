@@ -10,9 +10,9 @@ if (-not $python) {
     throw "python was not found on PATH. Install Python for all users, then run this script again."
 }
 
-& $python -c "import openai, azure.identity, win32serviceutil"
+& $python -c "import openai, azure.identity, win32serviceutil, slack_bolt, dotenv"
 if ($LASTEXITCODE -ne 0) {
-    throw "Install openai, azure-identity, and pywin32 for this Python, then run this script again."
+    throw "Install openai, azure-identity, pywin32, slack-bolt, and python-dotenv for this Python, then run this script again."
 }
 
 $credential = Get-Credential -UserName "ninety7\svc-adpilot" -Message "Password for the ADPilot service. Windows stores it for the service logon."
@@ -27,6 +27,18 @@ $logPermission = "{0}:(OI)(CI)M" -f $credential.UserName
 & icacls.exe $logs /grant $logPermission /T
 if ($LASTEXITCODE -ne 0) {
     throw "Could not grant the service account access to the logs folder."
+}
+$slackEnv = Join-Path $repo ".env"
+if (Test-Path $slackEnv) {
+    & icacls.exe $slackEnv /inheritance:r
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not restrict inherited access to the Slack configuration file."
+    }
+    $serviceReadPermission = "{0}:R" -f $credential.UserName
+    & icacls.exe $slackEnv /grant:r "NT AUTHORITY\SYSTEM:F" "BUILTIN\Administrators:F" $serviceReadPermission
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not grant the service account read access to the Slack configuration file."
+    }
 }
 
 $existing = Get-Service -Name "ADPilot" -ErrorAction SilentlyContinue

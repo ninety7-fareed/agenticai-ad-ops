@@ -24,11 +24,15 @@ if win32serviceutil is not None:
             win32serviceutil.ServiceFramework.__init__(self, args)
             self.stop_event = win32event.CreateEvent(None, 0, 0, None)
             self.server = None
+            self.slack_handler = None
+            self.slack_thread = None
 
         def SvcStop(self):
             self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
             if self.server is not None:
                 self.server.shutdown()
+            if self.slack_handler is not None:
+                self.slack_handler.close()
             win32event.SetEvent(self.stop_event)
 
         def SvcDoRun(self):
@@ -39,8 +43,37 @@ if win32serviceutil is not None:
             worker = threading.Thread(target=self.server.serve_forever)
             worker.daemon = True
             worker.start()
+            try:
+                from slack_integration import create_slack_handler
+
+                self.slack_handler = create_slack_handler()
+                if self.slack_handler is not None:
+                    self.slack_thread = threading.Thread(
+                        target=self._run_slack, name="ADPilotSlack", daemon=True,
+                    )
+                    self.slack_thread.start()
+                else:
+                    servicemanager.LogInfoMsg("ADPilot Slack integration is not configured")
+            except Exception as error:
+                message = "ADPilot Slack integration failed to initialize: {0}".format(error)
+                servicemanager.LogErrorMsg(message)
+                from server import log
+
+                log(message)
             win32event.WaitForSingleObject(self.stop_event, win32event.INFINITE)
             worker.join(timeout=10)
+            if self.slack_thread is not None:
+                self.slack_thread.join(timeout=10)
+
+        def _run_slack(self):
+            try:
+                self.slack_handler.start()
+            except Exception as error:
+                message = "ADPilot Slack connection stopped: {0}".format(error)
+                servicemanager.LogErrorMsg(message)
+                from server import log
+
+                log(message)
 
 
 if __name__ == "__main__":

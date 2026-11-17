@@ -38,10 +38,29 @@ The model is called by an Entra app registration, not by an interactive sign-in.
 The chat is a Windows service named `ADPilot`, set to start automatically and run as `ninety7\svc-adpilot`. That account needs **Log on as a service** on LAB02 and delegated Active Directory permission to unlock accounts only in the test OU. Do not make it a Domain Admin. The registration script grants the service account write access to the app's `logs` folder for server and audit logs. One-time setup from an elevated PowerShell on LAB02:
 
 ```powershell
-python -m pip install openai azure-identity pywin32
+python -m pip install openai azure-identity pywin32 slack-bolt python-dotenv
 .\register-adpilot-service.ps1
 ```
 
 Enter the `svc-adpilot` password at the prompt. After that, the chat survives logoff and reboot. On LAB02, open `http://127.0.0.1:8765`.
 
 `python server.py` runs the same chat in the foreground. `python main.py` is the console demo.
+
+## Slack direct messages
+
+The ADPilot service also starts the Slack Socket Mode bot when Slack is configured. The bot accepts direct messages only from the configured Slack user and workspace; it ignores channels, other users, and bot messages. Chat answers, errors, and unlock outcomes are sent only as DM replies. Unlock requests show an explicit Slack confirmation button and remain restricted to the configured test OU.
+
+Configure these values in the ignored `.env` file on LAB02; do not commit or paste token values. The service-registration script restricts `.env` access to the service account, SYSTEM, and local Administrators. Install Slack dependencies into the same all-users Python installation used by the ADPilot service, not only into a per-user virtual environment.
+
+- `SLACK_BOT_TOKEN`
+- `SLACK_APP_TOKEN`
+- `SLACK_ALLOWED_USER_ID`
+- `SLACK_ALLOWED_TEAM_ID`
+
+Enable Socket Mode and interactivity for the Slack app, subscribe to the `message.im` event, grant the bot `chat:write` and `im:history` scopes, and grant the app-level token `connections:write`. Reinstall the app after changing scopes. Restart the Windows service after updating `.env`:
+
+```powershell
+Restart-Service ADPilot
+```
+
+The bot runs in the same service as the web chat. If Slack settings are absent, the web chat remains available and Slack is not started. Partial Slack configuration or connection failures are written to the service logs.
