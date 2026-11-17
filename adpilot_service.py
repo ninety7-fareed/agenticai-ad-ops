@@ -66,14 +66,20 @@ if win32serviceutil is not None:
                 self.slack_thread.join(timeout=10)
 
         def _run_slack(self):
-            try:
-                self.slack_handler.start()
-            except Exception as error:
-                message = "ADPilot Slack connection stopped: {0}".format(error)
-                servicemanager.LogErrorMsg(message)
-                from server import log
+            from server import log
 
-                log(message)
+            while True:
+                try:
+                    self.slack_handler.connect()
+                    log("ADPilot Slack Socket Mode connected")
+                    return
+                except Exception as error:
+                    message = "ADPilot Slack connection failed: {0}".format(error)
+                    servicemanager.LogErrorMsg(message)
+                    log(message)
+                    wait_result = win32event.WaitForSingleObject(self.stop_event, 30000)
+                    if wait_result != win32event.WAIT_TIMEOUT:
+                        return
 
 
 if __name__ == "__main__":

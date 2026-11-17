@@ -10,8 +10,6 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from main import build_directory, make_client, runtime_settings
 from server import ChatSession, log
 
-load_dotenv(Path(__file__).with_name(".env"))
-
 REQUIRED_SETTINGS = (
     "SLACK_BOT_TOKEN",
     "SLACK_APP_TOKEN",
@@ -24,8 +22,25 @@ def _authorized(team_id, user_id, allowed_team, allowed_user):
     return team_id == allowed_team and user_id == allowed_user
 
 
+def _action_identity(body):
+    team = body.get("team")
+    user = body.get("user")
+    team_id = team.get("id") if isinstance(team, dict) else None
+    user_id = user.get("id") if isinstance(user, dict) else None
+    return team_id or body.get("team_id"), user_id or body.get("user_id")
+
+
+def _send_reply(say, *args, **kwargs):
+    try:
+        say(*args, **kwargs)
+    except Exception as error:
+        log("Slack reply delivery failed: {0}: {1}".format(type(error).__name__, error))
+
+
 def create_slack_handler(environ=None, session=None, app_factory=App,
                          handler_factory=SocketModeHandler):
+    if environ is None:
+        load_dotenv(Path(__file__).with_name(".env"))
     settings = os.environ if environ is None else environ
     values = {key: (settings.get(key) or "").strip() for key in REQUIRED_SETTINGS}
     if not any(values.values()):
@@ -39,7 +54,7 @@ def create_slack_handler(environ=None, session=None, app_factory=App,
     if session is None:
         directory = build_directory()
         session = ChatSession(make_client(runtime_settings()), directory)
-    app = app_factory(token=values["SLACK_BOT_TOKEN"])
+    app = app_factory(token=values["SLACK_BOT_TOKEN"], token_verification_enabled=False)
 
     @app.event("message")
     def handle_message(event, body, say):
@@ -49,20 +64,25 @@ def create_slack_handler(environ=None, session=None, app_factory=App,
             body.get("team_id"), event.get("user"),
             values["SLACK_ALLOWED_TEAM_ID"], values["SLACK_ALLOWED_USER_ID"],
         ):
+            log("Slack message ignored: sender or workspace is not allow-listed")
             return
         text = event.get("text", "").strip()
         if not text:
-            say("Send a text message to chat with ADPilot.")
+            _send_reply(say, "Send a text message to chat with ADPilot.")
             return
         try:
             result = session.reply(text)
         except Exception as error:
             log("Slack message failed: {0}: {1}".format(type(error).__name__, error))
-            say("ADPilot could not complete that request. Please try again; details are logged on LAB02.")
+            _send_reply(
+                say,
+                "ADPilot could not complete that request. Please try again; details are logged on LAB02.",
+            )
             return
 
         if isinstance(result, dict) and result.get("confirmation_required") is True:
-            say(
+            _send_reply(
+                say,
                 text="Confirm unlock for {0} ({1}, {2}) in the configured test OU?".format(
                     result["name"], result["username"], result["department"],
                 ),
@@ -104,16 +124,19 @@ def create_slack_handler(environ=None, session=None, app_factory=App,
                 }],
             )
             return
-        say(str(result))
+        _send_reply(say, str(result))
 
     def handle_confirmation(confirmed, ack, body, client):
         ack()
-        user = body.get("user") or {}
-        team = body.get("team") or {}
+        team_id, user_id = _action_identity(body)
         if not _authorized(
-            team.get("id"), user.get("id"),
+            team_id, user_id,
             values["SLACK_ALLOWED_TEAM_ID"], values["SLACK_ALLOWED_USER_ID"],
         ):
+            log("Slack action ignored: team_match={0}, user_match={1}".format(
+                team_id == values["SLACK_ALLOWED_TEAM_ID"],
+                user_id == values["SLACK_ALLOWED_USER_ID"],
+            ))
             return
         action = (body.get("actions") or [{}])[0]
         try:
@@ -128,12 +151,17 @@ def create_slack_handler(environ=None, session=None, app_factory=App,
         if not channel or not message_ts:
             log("Slack unlock confirmation lacked channel or message timestamp")
             return
-        client.chat_update(
-            channel=channel,
-            ts=message_ts,
-            text=answer,
-            blocks=[],
-        )
+        try:
+            client.chat_update(
+                channel=channel,
+                ts=message_ts,
+                text=answer,
+                blocks=[],
+            )
+        except Exception as error:
+            log("Slack confirmation reply delivery failed: {0}: {1}".format(
+                type(error).__name__, error,
+            ))
 
     @app.action("adpilot_unlock_confirm")
     def confirm_unlock(ack, body, client):

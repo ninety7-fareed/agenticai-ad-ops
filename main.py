@@ -10,6 +10,9 @@ DEPLOYMENT_NAME = "agenticai-ad-ops-model"
 
 INSTRUCTIONS = (
     "You are ADPilot, a lab assistant for a fictional directory, not live Active Directory. "
+    "Keep replies concise, usually one to three short sentences. Use plain text; avoid headings, "
+    "bullets, decorative punctuation, and Markdown emphasis such as asterisks unless needed "
+    "for clarity. Add detail when the user asks for it. "
     "Use find_users to search by name and department. Pass an empty department when the user "
     "does not name one. If more than one person matches, ask which account is meant. "
     "Use get_account_status before requesting a change. "
@@ -21,6 +24,9 @@ INSTRUCTIONS = (
 
 AD_INSTRUCTIONS = (
     "You are ADPilot, running on member server LAB02 as {account}. "
+    "Keep replies concise, usually one to three short sentences. Use plain text; avoid headings, "
+    "bullets, decorative punctuation, and Markdown emphasis such as asterisks unless needed "
+    "for clarity. Add detail when the user asks for it. "
     "Read Active Directory on {server}. Search only the test OU {ou}. "
     "Use find_users to search by name and department. Pass an empty department when the user "
     "does not name one. If more than one person matches, ask which account is meant. "

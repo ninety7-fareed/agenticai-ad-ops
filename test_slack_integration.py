@@ -13,8 +13,9 @@ SETTINGS = {
 
 
 class FakeApp:
-    def __init__(self, token):
+    def __init__(self, token, token_verification_enabled=True):
         self.token = token
+        self.token_verification_enabled = token_verification_enabled
         self.events = {}
         self.actions = {}
 
@@ -36,8 +37,8 @@ class SlackIntegrationTests(unittest.TestCase):
         self.session = Mock()
         self.apps = []
 
-        def app_factory(token):
-            app = FakeApp(token)
+        def app_factory(token, token_verification_enabled):
+            app = FakeApp(token, token_verification_enabled)
             self.apps.append(app)
             return app
 
@@ -142,8 +143,8 @@ class SlackIntegrationTests(unittest.TestCase):
         self.app.actions["adpilot_unlock_cancel"](
             ack=Mock(),
             body={
-                "team": {"id": "T_ALLOWED"},
-                "user": {"id": "U_ALLOWED"},
+                "team_id": "T_ALLOWED",
+                "user_id": "U_ALLOWED",
                 "actions": [{"value": "one-use-token"}],
                 "channel": {"id": "D_ALLOWED"},
                 "message": {"ts": "123.456"},
@@ -163,6 +164,7 @@ class SlackIntegrationTests(unittest.TestCase):
 
     def test_creates_socket_mode_handler_using_app_tokens(self):
         self.assertEqual(self.handler, "handler")
+        self.assertFalse(self.app.token_verification_enabled)
         self.handler_factory.assert_called_once()
         app, app_token = self.handler_factory.call_args.args
         self.assertIs(app, self.app)
