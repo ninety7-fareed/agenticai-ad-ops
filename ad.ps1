@@ -1,6 +1,6 @@
-# Read-only Active Directory queries for ADPilot.
+# Active Directory queries and scoped account unlocks for ADPilot.
 # Run on member server LAB02. Server is the domain controller, LAB01.
-# This script does not unlock or modify accounts.
+# Unlock requests are revalidated against the configured test OU before execution.
 
 param(
     [Parameter(Mandatory = $true)]
@@ -113,6 +113,46 @@ try {
         $users = New-Object System.Collections.Generic.List[object]
         $users.Add((Convert-User $user))
         Write-Result @{ ok = $true; ou = $ouDn; users = $users }
+        exit 0
+    }
+
+    if ($operation -eq "unlock") {
+        $username = [string]$request.username
+        if ([string]::IsNullOrWhiteSpace($username)) {
+            Write-Result @{ ok = $false; error = "invalid_username" }
+            exit 0
+        }
+        try {
+            $user = Get-ADUser -Server $Server -Identity $username -Properties Department, LockedOut, DisplayName, DistinguishedName
+        } catch {
+            $typeName = $_.Exception.GetType().Name
+            if ($typeName -eq "ADIdentityNotFoundException") {
+                Write-Result @{ ok = $false; error = "user_not_found" }
+                exit 0
+            }
+            throw
+        }
+        $distinguishedName = [string]$user.DistinguishedName
+        $suffix = ",{0}" -f $ouDn
+        if (-not $distinguishedName.EndsWith($suffix, [StringComparison]::OrdinalIgnoreCase)) {
+            Write-Result @{ ok = $false; error = "outside_test_ou" }
+            exit 0
+        }
+        if ($user.LockedOut -ne $true) {
+            $users = New-Object System.Collections.Generic.List[object]
+            $users.Add((Convert-User $user))
+            Write-Result @{ ok = $true; ou = $ouDn; status = "unchanged"; users = $users }
+            exit 0
+        }
+        Unlock-ADAccount -Server $Server -Identity $user.DistinguishedName -Confirm:$false
+        $updated = Get-ADUser -Server $Server -Identity $username -Properties Department, LockedOut, DisplayName, DistinguishedName
+        $users = New-Object System.Collections.Generic.List[object]
+        $users.Add((Convert-User $updated))
+        if ($updated.LockedOut -eq $true) {
+            Write-Result @{ ok = $false; error = "unlock_verification_failed"; ou = $ouDn; users = $users }
+            exit 1
+        }
+        Write-Result @{ ok = $true; ou = $ouDn; status = "unlocked"; users = $users }
         exit 0
     }
 

@@ -21,7 +21,13 @@ if (-not $password) {
     throw "A password is required so the service can run after logoff."
 }
 
-New-Item -ItemType Directory -Force -Path (Join-Path $repo "logs") | Out-Null
+$logs = Join-Path $repo "logs"
+New-Item -ItemType Directory -Force -Path $logs | Out-Null
+$logPermission = "{0}:(OI)(CI)M" -f $credential.UserName
+& icacls.exe $logs /grant $logPermission /T
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not grant the service account access to the logs folder."
+}
 
 $existing = Get-Service -Name "ADPilot" -ErrorAction SilentlyContinue
 if ($existing) {

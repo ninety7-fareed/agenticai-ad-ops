@@ -149,27 +149,83 @@ class ActiveDirectoryDirectoryTests(unittest.TestCase):
         self.assertEqual(result["reason"], "wrong_identity")
         self.assertIn("labuser", result["message"])
 
-    def test_unlock_does_not_call_powershell_or_confirmation(self):
-        def runner(*args):
-            raise AssertionError("powershell should not run")
+    def test_unlock_requires_confirmation_and_verifies_the_result(self):
+        updated = dict(JUAN_MARKETING, locked=False)
+        calls = []
 
-        confirm = Mock(side_effect=AssertionError("confirmation should not run"))
+        def runner(powershell, script_path, ou_name, server, service_account, request_json):
+            request = json.loads(request_json)
+            calls.append(request)
+            if request["op"] == "status":
+                return completed({"ok": True, "ou": OU, "users": [JUAN_MARKETING]})
+            return completed({
+                "ok": True, "ou": OU, "status": "unlocked", "users": [updated],
+            })
+
+        confirm = Mock(return_value=True)
         directory = ActiveDirectoryDirectory(runner=runner)
         result = directory.unlock_account("juan.marketing", confirm=confirm)
-        self.assertEqual(result["reason"], "unlock_not_enabled")
+
+        self.assertEqual(calls, [
+            {"op": "status", "username": "juan.marketing"},
+            {"op": "unlock", "username": "juan.marketing"},
+        ])
+        confirm.assert_called_once()
+        self.assertEqual(result["status"], "unlocked")
+        self.assertFalse(result["user"]["locked"])
+
+    def test_unlock_refusal_and_out_of_scope_user_never_request_mutation(self):
+        calls = []
+
+        def runner(powershell, script_path, ou_name, server, service_account, request_json):
+            calls.append(json.loads(request_json))
+            return completed({"ok": True, "ou": OU, "users": [JUAN_MARKETING]})
+
+        confirm = Mock(return_value=False)
+        directory = ActiveDirectoryDirectory(runner=runner)
+        refused = directory.unlock_account("juan.marketing", confirm=confirm)
+        self.assertEqual(refused["reason"], "confirmation_denied")
+        self.assertEqual(calls, [{"op": "status", "username": "juan.marketing"}])
+        confirm.assert_called_once()
+
+        calls.clear()
+        directory = ActiveDirectoryDirectory(
+            runner=lambda *args: calls.append(json.loads(args[-1]))
+            or completed({"ok": True, "ou": OU, "users": [SAM]})
+        )
+        outside = directory.unlock_account("sam.ops", confirm=Mock(return_value=True))
+        self.assertEqual(outside["reason"], "outside_test_ou")
+        self.assertEqual(calls, [{"op": "status", "username": "sam.ops"}])
+
+    def test_unlock_of_an_already_unlocked_account_is_unchanged(self):
+        calls = []
+
+        def runner(powershell, script_path, ou_name, server, service_account, request_json):
+            calls.append(json.loads(request_json))
+            return completed({"ok": True, "ou": OU, "users": [JUAN_FINANCE]})
+
+        confirm = Mock(side_effect=AssertionError("confirmation is unnecessary"))
+        directory = ActiveDirectoryDirectory(runner=runner)
+        result = directory.unlock_account("juan.finance", confirm=confirm)
+
+        self.assertEqual(result["status"], "unchanged")
+        self.assertEqual(calls, [{"op": "status", "username": "juan.finance"}])
         confirm.assert_not_called()
 
-    def test_script_is_read_only(self):
+    def test_script_checks_identity_and_ou_before_unlocking(self):
         with open(SCRIPT_PATH, encoding="utf-8") as handle:
             script = handle.read().casefold()
         self.assertIn("get-aduser", script)
         self.assertIn("-server $server", script)
         self.assertIn("windowsidentity", script)
         self.assertIn("wrong_identity", script)
+        self.assertIn('if ($operation -eq "unlock")', script)
+        self.assertIn("outside_test_ou", script)
+        self.assertIn("unlock-adaccount -server $server", script)
+        self.assertIn("-confirm:$false", script)
         self.assertNotIn("svc-adpilot", script)
         self.assertNotIn("password", script)
-        for forbidden in ("unlock-adaccount", "set-adaccountpassword", "remove-aduser",
-                          "invoke-expression"):
+        for forbidden in ("set-adaccountpassword", "remove-aduser", "invoke-expression"):
             self.assertNotIn(forbidden, script)
 
     def test_runner_passes_config_as_arguments_and_request_as_data(self):
@@ -216,7 +272,7 @@ class DirectorySelectionTests(unittest.TestCase):
         self.assertIn("svc-adpilot", selected.instructions)
         self.assertIn("AgenticAI-AD-OPs-test", selected.instructions)
         self.assertIn("LAB01.ninety7.local", selected.instructions)
-        self.assertIn("disabled", selected.tools[2]["description"])
+        self.assertIn("browser confirmation", selected.tools[2]["description"])
         self.assertEqual(
             [tool["name"] for tool in selected.tools],
             ["find_users", "get_account_status", "unlock_account"],

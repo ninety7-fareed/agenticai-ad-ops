@@ -25,16 +25,18 @@ AD_INSTRUCTIONS = (
     "Use find_users to search by name and department. Pass an empty department when the user "
     "does not name one. If more than one person matches, ask which account is meant. "
     "Use get_account_status to report whether that account is enabled and locked. "
-    "unlock_account is disabled and cannot change the directory. "
-    "If a tool returns denied, not_found, failed, or unlock_not_enabled, say so and do not "
-    "claim an account was changed."
+    "You may request unlock_account only for a locked account in the configured test OU, "
+    "after the user identifies the account. The application requires a separate browser "
+    "confirmation before changing the directory. "
+    "If a tool returns denied, not_found, failed, or unchanged, say so and do not claim a change."
 )
 
 AD_TOOL_DESCRIPTIONS = (
     "Find accounts in the configured test OU whose name or username contains the given name. "
     "Pass an empty department to search every department. Read-only.",
     "Return the enabled and locked state for one account in the configured test OU. Read-only.",
-    "Unlock is disabled. This call does not change Active Directory.",
+    "Request unlocking one locked account in the configured test OU. "
+    "The application requires a separate browser confirmation before it changes Active Directory.",
 )
 
 TOOLS = [
@@ -188,6 +190,14 @@ def deny_unlock(user):
     return False
 
 
+class ConfirmationRequired(Exception):
+    """Signal that a browser confirmation is needed before changing an account."""
+
+    def __init__(self, user):
+        self.user = dict(user)
+        super().__init__("Browser confirmation is required to unlock this account")
+
+
 def prompt_confirm(user):
     """Ask on the terminal before a fictional test-OU unlock."""
     answer = input(
@@ -304,6 +314,15 @@ class AuditedDirectory:
         timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         try:
             result = call()
+        except ConfirmationRequired as request:
+            self._write({
+                "time": timestamp,
+                "tool": tool,
+                "arguments": arguments,
+                "status": "confirmation_required",
+                "username": request.user.get("username"),
+            })
+            raise
         except Exception as exc:
             self._write({
                 "time": timestamp,
@@ -328,7 +347,7 @@ class AuditedDirectory:
 
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "adpilot.json")
-DEFAULT_AUDIT_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.log")
+DEFAULT_AUDIT_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "audit.log")
 CONFIG_KEYS = {
     "directory": "ADPILOT_DIRECTORY",
     "dc": "ADPILOT_DC",
@@ -412,7 +431,8 @@ def build_directory(environ=None, config_path=None):
     for tool, description in zip(tools, AD_TOOL_DESCRIPTIONS):
         tool["description"] = description
     banner = (
-        "ADPilot on LAB02 as {0}. Reading OU {1} from {2}. Unlock is disabled. Type quit to exit."
+        "ADPilot on LAB02 as {0}. Reading OU {1} from {2}. "
+        "Unlocks require browser confirmation. Type quit to exit."
     ).format(directory.service_account, directory.ou_name, directory.server)
     instructions = AD_INSTRUCTIONS.format(
         ou=directory.ou_name, server=directory.server, account=directory.service_account,

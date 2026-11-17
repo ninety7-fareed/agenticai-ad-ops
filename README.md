@@ -29,13 +29,13 @@ Try `unlock Juan in marketing`. The live demo uses the existing endpoint and `ag
 
 ## Active Directory on LAB02
 
-The chat runs on member server **LAB02** as `svc-adpilot` and keeps running after you log off. Active Directory stays on domain controller **LAB01**. Searches stay in the test OU `AgenticAI-AD-OPs-test`. Unlock is still disabled.
+The chat runs on member server **LAB02** as `svc-adpilot` and keeps running after you log off. Active Directory stays on domain controller **LAB01**. Searches and unlocks are restricted to the configured test OU, `AgenticAI-AD-OPs-test`. Each unlock requires a separate browser confirmation for the specific account, and the app verifies the account is in the OU and still locked before changing it and verifies the result afterward.
 
 Settings live in `adpilot.json` in this folder. Git ignores that file, so it stays on the machine and is not pushed. Put the Entra app values there once. Do not put the `svc-adpilot` Windows password in it. Windows stores that password in the service logon.
 
 The model is called by an Entra app registration, not by an interactive sign-in. Create an app, give it a client secret, and on the Foundry resource assign that app the **Cognitive Services User** role. No API permissions are required on the app. Copy the tenant ID, client ID, and secret into `azure_tenant_id`, `azure_client_id`, and `azure_client_secret` in `adpilot.json`.
 
-The chat is a Windows service named `ADPilot`, set to start automatically and run as `ninety7\svc-adpilot`. That account needs **Log on as a service** on LAB02. One-time setup from an elevated PowerShell on LAB02:
+The chat is a Windows service named `ADPilot`, set to start automatically and run as `ninety7\svc-adpilot`. That account needs **Log on as a service** on LAB02 and delegated Active Directory permission to unlock accounts only in the test OU. Do not make it a Domain Admin. The registration script grants the service account write access to the app's `logs` folder for server and audit logs. One-time setup from an elevated PowerShell on LAB02:
 
 ```powershell
 python -m pip install openai azure-identity pywin32

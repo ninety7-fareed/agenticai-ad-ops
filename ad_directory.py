@@ -153,7 +153,7 @@ def _matches(user, name, department):
 
 
 class ActiveDirectoryDirectory:
-    """Queries the test OU on LAB01. Unlock is intentionally unavailable."""
+    """Queries and unlocks accounts only inside the configured test OU on LAB01."""
 
     def __init__(self, ou_name=DEFAULT_OU, server=DEFAULT_SERVER,
                  service_account=DEFAULT_SERVICE_ACCOUNT, powershell="powershell.exe",
@@ -199,13 +199,49 @@ class ActiveDirectoryDirectory:
         return {"source": SOURCE, "user": None, "status": "not_found"}
 
     def unlock_account(self, username, confirm):
-        del confirm
-        return {
-            "source": SOURCE,
-            "status": "denied",
-            "reason": "unlock_not_enabled",
-            "username": username,
-        }
+        if not _valid_username(username):
+            return _failure("invalid_username")
+        requested = username.strip()
+        current = self.get_account_status(requested)
+        user = current.get("user") if isinstance(current, dict) else None
+        if user is None:
+            return current
+        if not user.get("test_ou"):
+            return {
+                "source": SOURCE,
+                "status": "denied",
+                "reason": "outside_test_ou",
+                "username": requested,
+            }
+        if not user.get("locked"):
+            return {
+                "source": SOURCE,
+                "status": "unchanged",
+                "reason": "not_locked",
+                "user": user,
+            }
+        if not confirm(user):
+            return {
+                "source": SOURCE,
+                "status": "denied",
+                "reason": "confirmation_denied",
+                "username": requested,
+            }
+
+        payload, error = self._request({"op": "unlock", "username": requested})
+        if error:
+            return error
+        status = payload.get("status")
+        matches = [
+            item for item in self._filter(payload, "", "")
+            if item["username"].casefold() == requested.casefold()
+        ]
+        if status not in {"unlocked", "unchanged"} or not matches:
+            return _failure("unlock_verification_failed")
+        updated = matches[0]
+        if updated["locked"]:
+            return _failure("unlock_verification_failed")
+        return {"source": SOURCE, "status": status, "user": updated}
 
     def _filter(self, payload, name, department):
         ou_dn = payload.get("ou")

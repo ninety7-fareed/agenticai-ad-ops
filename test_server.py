@@ -5,8 +5,20 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from main import INSTRUCTIONS, TOOLS, credential_from_settings, ensure_config, runtime_settings
+from main import (
+    INSTRUCTIONS, TOOLS, AuditedDirectory, DemoDirectory, credential_from_settings,
+    ensure_config, runtime_settings,
+)
 from server import ChatSession, dispatch
+
+
+def unlock_call():
+    return SimpleNamespace(
+        type="function_call",
+        name="unlock_account",
+        arguments='{"username":"juan.marketing"}',
+        call_id="unlock_1",
+    )
 
 
 class ConfigTests(unittest.TestCase):
@@ -73,6 +85,8 @@ class ChatTests(unittest.TestCase):
         self.assertIn("text/html", content_type)
         self.assertIn("<form>", page)
         self.assertIn("/message", page)
+        self.assertIn("/confirm", page)
+        self.assertIn("window.confirm", page)
 
     def test_message_returns_the_model_answer(self):
         client = Mock()
@@ -108,6 +122,65 @@ class ChatTests(unittest.TestCase):
         )
         self.assertEqual(status, 400)
         self.assertEqual(json.loads(body)["error"], "text is required")
+
+    def test_unlock_requires_browser_confirmation_and_is_verified(self):
+        with tempfile.TemporaryDirectory() as temp:
+            audit_path = os.path.join(temp, "audit.log")
+            directory = AuditedDirectory(
+                DemoDirectory(), audit_path, "banner", INSTRUCTIONS, TOOLS,
+            )
+            client = Mock()
+            client.responses.create.return_value = SimpleNamespace(
+                output=[unlock_call()], output_text="",
+            )
+            session = ChatSession(client, directory)
+
+            status, body, _content_type = dispatch(
+                "POST", "/message", b'{"text":"Unlock Juan Reyes"}', session,
+            )
+            pending = json.loads(body)
+            self.assertEqual(status, 200)
+            self.assertTrue(pending["confirmation_required"])
+            self.assertEqual(pending["username"], "juan.marketing")
+            self.assertTrue(directory.get_account_status("juan.marketing")["user"]["locked"])
+
+            status, body, _content_type = dispatch(
+                "POST",
+                "/confirm",
+                json.dumps({"token": pending["token"], "confirmed": True}).encode("utf-8"),
+                session,
+            )
+            self.assertEqual(status, 200)
+            self.assertIn("verified", json.loads(body)["answer"])
+            self.assertFalse(directory.get_account_status("juan.marketing")["user"]["locked"])
+
+            with open(audit_path, encoding="utf-8") as handle:
+                entries = [json.loads(line) for line in handle]
+            self.assertEqual(entries[0]["status"], "confirmation_required")
+            self.assertTrue(any(
+                entry.get("result", {}).get("status") == "unlocked" for entry in entries
+            ))
+
+    def test_cancelling_unlock_consumes_confirmation_without_changing_account(self):
+        directory = DemoDirectory()
+        directory.instructions = INSTRUCTIONS
+        directory.tools = TOOLS
+        client = Mock()
+        client.responses.create.return_value = SimpleNamespace(
+            output=[unlock_call()], output_text="",
+        )
+        session = ChatSession(client, directory)
+        pending = session.reply("Unlock Juan Reyes")
+
+        answer = session.confirm_unlock(pending["token"], False)
+        self.assertIn("cancelled", answer)
+        self.assertTrue(directory.get_account_status("juan.marketing")["user"]["locked"])
+        self.assertIn("expired or is invalid", session.confirm_unlock(pending["token"], True))
+
+    def test_confirm_rejects_malformed_requests(self):
+        status, body, _content_type = dispatch("POST", "/confirm", b'{"token":"x"}', Mock())
+        self.assertEqual(status, 400)
+        self.assertIn("required", json.loads(body)["error"])
 
 
 if __name__ == "__main__":
