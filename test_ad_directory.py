@@ -289,6 +289,7 @@ class DirectorySelectionTests(unittest.TestCase):
             audited.find_users("Juan", "Marketing")
             with open(log_path, encoding="utf-8") as handle:
                 entry = json.loads(handle.readline())
+        self.assertRegex(entry["time"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00$")
         self.assertEqual(entry["tool"], "find_users")
         self.assertEqual(entry["status"], "ok")
         self.assertEqual(entry["arguments"], {"name": "Juan", "department": "Marketing"})

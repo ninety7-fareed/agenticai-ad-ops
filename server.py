@@ -5,6 +5,7 @@ import os
 import secrets
 import threading
 import time
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from main import (
@@ -110,8 +111,9 @@ form.addEventListener("submit", async (event) => {
 def log(message):
     directory = os.path.dirname(LOG_PATH)
     os.makedirs(directory, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     with open(LOG_PATH, "a", encoding="utf-8", newline="\n") as handle:
-        handle.write(message + "\n")
+        handle.write("{0} {1}\n".format(timestamp, message))
 
 
 class ChatSession:
@@ -221,7 +223,7 @@ def _message(body, session):
     try:
         result = session.reply(text.strip())
     except Exception as error:
-        log("message failed: {0}".format(error))
+        log("message failed: {0}: {1}".format(type(error).__name__, error))
         result = {"answer": str(error)}
     if isinstance(result, dict):
         payload = result

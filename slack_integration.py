@@ -34,7 +34,9 @@ def _send_reply(say, *args, **kwargs):
     try:
         say(*args, **kwargs)
     except Exception as error:
-        log("Slack reply delivery failed: {0}: {1}".format(type(error).__name__, error))
+        log("Slack reply delivery failed: {0}.{1}: {2}".format(
+            type(error).__module__, type(error).__name__, error,
+        ))
 
 
 def create_slack_handler(environ=None, session=None, app_factory=App,
@@ -73,7 +75,9 @@ def create_slack_handler(environ=None, session=None, app_factory=App,
         try:
             result = session.reply(text)
         except Exception as error:
-            log("Slack message failed: {0}: {1}".format(type(error).__name__, error))
+            log("Slack-triggered ADPilot response failed: {0}.{1}: {2}".format(
+                type(error).__module__, type(error).__name__, error,
+            ))
             _send_reply(
                 say,
                 "ADPilot could not complete that request. Please try again; details are logged on LAB02.",
@@ -142,8 +146,8 @@ def create_slack_handler(environ=None, session=None, app_factory=App,
         try:
             answer = session.confirm_unlock(action.get("value", ""), confirmed)
         except Exception as error:
-            log("Slack unlock confirmation failed: {0}: {1}".format(
-                type(error).__name__, error,
+            log("Slack unlock processing failed: {0}.{1}: {2}".format(
+                type(error).__module__, type(error).__name__, error,
             ))
             answer = "ADPilot could not complete that unlock. Details are logged on LAB02."
         channel = (body.get("channel") or {}).get("id")
@@ -159,8 +163,8 @@ def create_slack_handler(environ=None, session=None, app_factory=App,
                 blocks=[],
             )
         except Exception as error:
-            log("Slack confirmation reply delivery failed: {0}: {1}".format(
-                type(error).__name__, error,
+            log("Slack confirmation delivery failed: {0}.{1}: {2}".format(
+                type(error).__module__, type(error).__name__, error,
             ))
 
     @app.action("adpilot_unlock_confirm")

@@ -3,13 +3,13 @@ import os
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from main import (
     INSTRUCTIONS, TOOLS, AuditedDirectory, DemoDirectory, credential_from_settings,
     ensure_config, runtime_settings,
 )
-from server import ChatSession, dispatch
+from server import ChatSession, dispatch, log
 
 
 def unlock_call():
@@ -79,6 +79,18 @@ class EntraCredentialTests(unittest.TestCase):
 
 
 class ChatTests(unittest.TestCase):
+    def test_server_log_includes_utc_timestamp(self):
+        with tempfile.TemporaryDirectory() as temp:
+            log_path = os.path.join(temp, "server.log")
+            with patch("server.LOG_PATH", log_path):
+                log("test event")
+            with open(log_path, encoding="utf-8") as handle:
+                entry = handle.readline().rstrip("\n")
+
+        timestamp, message = entry.split(" ", 1)
+        self.assertRegex(timestamp, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00$")
+        self.assertEqual(message, "test event")
+
     def test_page_has_a_message_form(self):
         status, page, content_type = dispatch("GET", "/", None, None)
         self.assertEqual(status, 200)
@@ -110,11 +122,17 @@ class ChatTests(unittest.TestCase):
             def reply(self, text):
                 raise RuntimeError("content filter")
 
-        status, body, _content_type = dispatch(
-            "POST", "/message", b'{"text":"hello"}', Broken(),
-        )
+        with tempfile.TemporaryDirectory() as temp:
+            log_path = os.path.join(temp, "server.log")
+            with patch("server.LOG_PATH", log_path):
+                status, body, _content_type = dispatch(
+                    "POST", "/message", b'{"text":"hello"}', Broken(),
+                )
+            with open(log_path, encoding="utf-8") as handle:
+                entry = handle.read()
         self.assertEqual(status, 200)
         self.assertIn("content filter", json.loads(body)["answer"])
+        self.assertIn("message failed: RuntimeError: content filter", entry)
 
     def test_blank_message_is_rejected(self):
         status, body, _content_type = dispatch(

@@ -10,6 +10,8 @@
 
 Python executes the calls, returns each JSON result with its matching call ID, and asks for a separate yes or no before changing an account. Two fictional users are named Juan. Only Juan Reyes (`juan.marketing`) is in Marketing and locked. `sam.ops` is locked outside the test OU, so an unlock is denied. Unsupported tools and invalid arguments are rejected, and tool rounds are limited.
 
+ADPilot is intended for this app's directory account search, status, and unlock tasks; it should decline unrelated questions.
+
 Run the offline tests (no dependencies, credentials, or network required):
 
 ```sh
@@ -35,7 +37,7 @@ Settings live in `adpilot.json` in this folder. Git ignores that file, so it sta
 
 The model is called by an Entra app registration, not by an interactive sign-in. Create an app, give it a client secret, and on the Foundry resource assign that app the **Cognitive Services User** role. No API permissions are required on the app. Copy the tenant ID, client ID, and secret into `azure_tenant_id`, `azure_client_id`, and `azure_client_secret` in `adpilot.json`.
 
-The chat is a Windows service named `ADPilot`, set to start automatically and run as `ninety7\svc-adpilot`. That account needs **Log on as a service** on LAB02 and delegated Active Directory permission to unlock accounts only in the test OU. Do not make it a Domain Admin. The registration script grants the service account write access to the app's `logs` folder for server and audit logs. One-time setup from an elevated PowerShell on LAB02:
+The chat is a Windows service named `ADPilot`, set to start automatically and run as `ninety7\svc-adpilot`. That account needs **Log on as a service** on LAB02 and delegated Active Directory permission to unlock accounts only in the test OU. Do not make it a Domain Admin. The registration script grants the service account write access to the app's `logs` folder for server and audit logs. Both logs include ISO 8601 UTC timestamps. One-time setup from an elevated PowerShell on LAB02:
 
 ```powershell
 python -m pip install openai azure-identity pywin32 slack-bolt python-dotenv

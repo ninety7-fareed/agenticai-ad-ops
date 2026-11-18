@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from slack_integration import create_slack_handler
 
@@ -81,6 +81,25 @@ class SlackIntegrationTests(unittest.TestCase):
         )
         self.session.reply.assert_not_called()
         say.assert_not_called()
+
+    def test_slack_model_failure_is_logged_as_response_failure(self):
+        self.session.reply.side_effect = TimeoutError("Request timed out")
+        say = Mock()
+        with patch("slack_integration.log") as log_mock:
+            self.app.events["message"](
+                event={
+                    "channel_type": "im",
+                    "user": "U_ALLOWED",
+                    "text": "Find Juan",
+                },
+                body={"team_id": "T_ALLOWED"},
+                say=say,
+            )
+
+        log_mock.assert_called_once_with(
+            "Slack-triggered ADPilot response failed: builtins.TimeoutError: Request timed out",
+        )
+        say.assert_called_once()
 
     def test_unlock_request_sends_scoped_confirmation_buttons(self):
         self.session.reply.return_value = {
