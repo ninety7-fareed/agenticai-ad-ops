@@ -8,6 +8,7 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from main import build_directory, make_client, runtime_settings
+from net_retry import call_with_retry
 from server import ChatSession, log
 
 REQUIRED_SETTINGS = (
@@ -32,7 +33,7 @@ def _action_identity(body):
 
 def _send_reply(say, *args, **kwargs):
     try:
-        say(*args, **kwargs)
+        call_with_retry(lambda: say(*args, **kwargs), "Slack reply", log)
     except Exception as error:
         log("Slack reply delivery failed: {0}.{1}: {2}".format(
             type(error).__module__, type(error).__name__, error,
@@ -156,11 +157,15 @@ def create_slack_handler(environ=None, session=None, app_factory=App,
             log("Slack unlock confirmation lacked channel or message timestamp")
             return
         try:
-            client.chat_update(
-                channel=channel,
-                ts=message_ts,
-                text=answer,
-                blocks=[],
+            call_with_retry(
+                lambda: client.chat_update(
+                    channel=channel,
+                    ts=message_ts,
+                    text=answer,
+                    blocks=[],
+                ),
+                "Slack confirmation",
+                log,
             )
         except Exception as error:
             log("Slack confirmation delivery failed: {0}.{1}: {2}".format(

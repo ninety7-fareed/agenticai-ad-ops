@@ -5,6 +5,8 @@ import json
 import os
 from datetime import datetime, timezone
 
+from net_retry import call_with_retry
+
 ENDPOINT = "https://agenticai-ad-ops-resource.services.ai.azure.com/openai/v1"
 DEPLOYMENT_NAME = "agenticai-ad-ops-model"
 
@@ -263,11 +265,15 @@ def get_answer(client, prompt, *, directory=None, confirm=deny_unlock,
     turn = list(messages)
     turn.append({"role": "user", "content": prompt})
     for round_number in range(max_tool_rounds + 1):
-        response = client.responses.create(
-            model=DEPLOYMENT_NAME,
-            instructions=instructions,
-            input=list(turn),
-            tools=tools,
+        response = call_with_retry(
+            lambda: client.responses.create(
+                model=DEPLOYMENT_NAME,
+                instructions=instructions,
+                input=list(turn),
+                tools=tools,
+            ),
+            "Azure OpenAI request",
+            _log_network_retry,
         )
         calls = [item for item in response.output if item.type == "function_call"]
         if not calls:
@@ -470,14 +476,21 @@ def credential_from_settings(settings, secret_credential, default_credential):
     return default_credential()
 
 
+def _log_network_retry(message):
+    from server import log
+
+    log(message)
+
+
 def make_client(settings):
     # Import and authenticate only when a live client is created.
+    # Retries live in get_answer, with a 60s cap so a stalled handshake ends.
     from openai import OpenAI
     from azure.identity import ClientSecretCredential, DefaultAzureCredential, get_bearer_token_provider
 
     credential = credential_from_settings(settings, ClientSecretCredential, DefaultAzureCredential)
     token_provider = get_bearer_token_provider(credential, AZURE_TOKEN_SCOPE)
-    return OpenAI(base_url=ENDPOINT, api_key=token_provider)
+    return OpenAI(base_url=ENDPOINT, api_key=token_provider, timeout=60.0, max_retries=0)
 
 
 def main():

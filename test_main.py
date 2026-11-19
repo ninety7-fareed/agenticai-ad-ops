@@ -1,7 +1,7 @@
 import json
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from main import DEPLOYMENT_NAME, INSTRUCTIONS, TOOLS, DemoDirectory, get_answer
 
@@ -146,6 +146,52 @@ class ToolCallingTests(unittest.TestCase):
         sent = json.loads(client.responses.create.call_args.kwargs["input"][-1]["output"])
         self.assertEqual(sent["reason"], "confirmation_denied")
         self.assertEqual(answer, "Unlock was not confirmed.")
+
+
+class APIConnectionError(Exception):
+    """Stand-in for openai.APIConnectionError."""
+
+
+class NetworkRetryTests(unittest.TestCase):
+    def test_transient_model_error_retries_without_repeating_tools(self):
+        client, directory = Mock(), Mock()
+        directory.find_users.return_value = {"users": []}
+        client.responses.create.side_effect = [
+            response(tool_call()),
+            APIConnectionError("Connection error."),
+            response(text="Done"),
+        ]
+
+        with patch("net_retry.time.sleep") as sleep, patch("server.log"):
+            answer = get_answer(client, "Check Juan", directory=directory)
+
+        self.assertEqual(answer, "Done")
+        directory.find_users.assert_called_once()
+        self.assertEqual(client.responses.create.call_count, 3)
+        sleep.assert_called_once_with(20)
+
+    def test_model_error_is_raised_after_retries_are_exhausted(self):
+        client, directory = Mock(), Mock()
+        client.responses.create.side_effect = APIConnectionError("Connection error.")
+
+        with patch("net_retry.time.sleep") as sleep, patch("server.log"):
+            with self.assertRaises(APIConnectionError):
+                get_answer(client, "Check Juan", directory=directory)
+
+        self.assertEqual(client.responses.create.call_count, 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [20, 45])
+        assert_tools_not_called(self, directory)
+
+    def test_non_network_model_error_is_not_retried(self):
+        client, directory = Mock(), Mock()
+        client.responses.create.side_effect = RuntimeError("content filter")
+
+        with patch("net_retry.time.sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, "content filter"):
+                get_answer(client, "Check Juan", directory=directory)
+
+        sleep.assert_not_called()
+        self.assertEqual(client.responses.create.call_count, 1)
 
 
 class DemoDirectoryTests(unittest.TestCase):

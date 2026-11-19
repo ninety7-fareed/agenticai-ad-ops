@@ -1,5 +1,6 @@
 import unittest
 from unittest.mock import Mock, patch
+from urllib.error import URLError
 
 from slack_integration import create_slack_handler
 
@@ -100,6 +101,63 @@ class SlackIntegrationTests(unittest.TestCase):
             "Slack-triggered ADPilot response failed: builtins.TimeoutError: Request timed out",
         )
         say.assert_called_once()
+
+    def test_slack_reply_retries_a_handshake_timeout(self):
+        self.session.reply.return_value = "ADPilot response"
+        say = Mock(side_effect=[URLError("handshake timed out"), None])
+
+        with patch("net_retry.time.sleep") as sleep, patch("slack_integration.log") as log_mock:
+            self.app.events["message"](
+                event={
+                    "channel_type": "im",
+                    "user": "U_ALLOWED",
+                    "text": "Find Juan",
+                },
+                body={"team_id": "T_ALLOWED"},
+                say=say,
+            )
+
+        self.assertEqual(say.call_count, 2)
+        sleep.assert_called_once_with(20)
+        log_mock.assert_called_once()
+        self.assertIn("retrying in 20s", log_mock.call_args.args[0])
+
+    def test_slack_reply_reports_delivery_failure_after_retries(self):
+        self.session.reply.return_value = "ADPilot response"
+        say = Mock(side_effect=URLError("handshake timed out"))
+
+        with patch("net_retry.time.sleep") as sleep, patch("slack_integration.log") as log_mock:
+            self.app.events["message"](
+                event={
+                    "channel_type": "im",
+                    "user": "U_ALLOWED",
+                    "text": "Find Juan",
+                },
+                body={"team_id": "T_ALLOWED"},
+                say=say,
+            )
+
+        self.assertEqual(say.call_count, 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [20, 45])
+        self.assertIn("Slack reply delivery failed", log_mock.call_args_list[-1].args[0])
+
+    def test_slack_reply_does_not_retry_a_rejected_message(self):
+        self.session.reply.return_value = "ADPilot response"
+        say = Mock(side_effect=RuntimeError("invalid_blocks"))
+
+        with patch("net_retry.time.sleep") as sleep, patch("slack_integration.log"):
+            self.app.events["message"](
+                event={
+                    "channel_type": "im",
+                    "user": "U_ALLOWED",
+                    "text": "Find Juan",
+                },
+                body={"team_id": "T_ALLOWED"},
+                say=say,
+            )
+
+        say.assert_called_once()
+        sleep.assert_not_called()
 
     def test_unlock_request_sends_scoped_confirmation_buttons(self):
         self.session.reply.return_value = {
