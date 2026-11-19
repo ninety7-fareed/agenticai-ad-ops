@@ -66,3 +66,4 @@ Restart-Service ADPilot
 ```
 
 The bot runs in the same service as the web chat. If Slack settings are absent, the web chat remains available and Slack is not started. Partial Slack configuration or connection failures are written to the service logs.
+Socket Mode connection logs record the destination hostname, connection stage, result, and elapsed time for each URL-request and WebSocket-connect attempt. They do not include tokens or WebSocket URLs.

@@ -1,11 +1,15 @@
 """Slack DM integration for the ADPilot Windows service."""
 
 import os
+import threading
+import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
+from slack_sdk.web import WebClient
 
 from main import build_directory, make_client, runtime_settings
 from net_retry import call_with_retry
@@ -17,6 +21,97 @@ REQUIRED_SETTINGS = (
     "SLACK_ALLOWED_USER_ID",
     "SLACK_ALLOWED_TEAM_ID",
 )
+
+
+def _hostname(url):
+    try:
+        return urlsplit(url).hostname or "unknown"
+    except ValueError:
+        return "unknown"
+
+
+class InstrumentedSlackWebClient(WebClient):
+    """Log each Socket Mode URL HTTP attempt without recording request data."""
+
+    def __init__(self, *args, log_func=log, **kwargs):
+        self._connection_log = log_func
+        self._socket_mode_url_attempt = 0
+        self._socket_mode_url_attempt_lock = threading.Lock()
+        super().__init__(*args, **kwargs)
+
+    def _perform_urllib_http_request_internal(self, url, req):
+        parsed_url = urlsplit(url)
+        if not parsed_url.path.rstrip("/").endswith("/apps.connections.open"):
+            return super()._perform_urllib_http_request_internal(url, req)
+
+        with self._socket_mode_url_attempt_lock:
+            self._socket_mode_url_attempt += 1
+            attempt = self._socket_mode_url_attempt
+        destination = parsed_url.hostname or "unknown"
+        started = time.perf_counter()
+        try:
+            response = super()._perform_urllib_http_request_internal(url, req)
+        except Exception as error:
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            error_type = "{0}.{1}".format(type(error).__module__, type(error).__name__)
+            self._connection_log(
+                "Slack connection attempt={0} stage=socket_mode_url "
+                "destination_hostname={1} elapsed_ms={2:.1f} result=failed error_type={3}".format(
+                    attempt, destination, elapsed_ms, error_type,
+                )
+            )
+            raise
+
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        self._connection_log(
+            "Slack connection attempt={0} stage=socket_mode_url "
+            "destination_hostname={1} elapsed_ms={2:.1f} result=http_{3}".format(
+                attempt, destination, elapsed_ms, response.get("status", "unknown"),
+            )
+        )
+        return response
+
+
+def _instrument_websocket_connect(handler, log_func=log):
+    client = handler.client
+    original_connect = client.connect
+    attempt_lock = threading.Lock()
+    attempts = 0
+
+    def connect():
+        nonlocal attempts
+        if client.wss_uri is None:
+            client.wss_uri = client.issue_new_wss_url()
+        destination = _hostname(client.wss_uri)
+        with attempt_lock:
+            attempts += 1
+            attempt = attempts
+        started = time.perf_counter()
+        try:
+            result = original_connect()
+        except Exception as error:
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            error_type = "{0}.{1}".format(type(error).__module__, type(error).__name__)
+            log_func(
+                "Slack connection attempt={0} stage=websocket_connect "
+                "destination_hostname={1} elapsed_ms={2:.1f} result=failed error_type={3}".format(
+                    attempt, destination, elapsed_ms, error_type,
+                )
+            )
+            raise
+
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        result_name = "connected" if client.is_connected() else "not_connected"
+        log_func(
+            "Slack connection attempt={0} stage=websocket_connect "
+            "destination_hostname={1} elapsed_ms={2:.1f} result={3}".format(
+                attempt, destination, elapsed_ms, result_name,
+            )
+        )
+        return result
+
+    client.connect = connect
+    return handler
 
 
 def _authorized(team_id, user_id, allowed_team, allowed_user):
@@ -57,7 +152,8 @@ def create_slack_handler(environ=None, session=None, app_factory=App,
     if session is None:
         directory = build_directory()
         session = ChatSession(make_client(runtime_settings()), directory)
-    app = app_factory(token=values["SLACK_BOT_TOKEN"], token_verification_enabled=False)
+    web_client = InstrumentedSlackWebClient(token=values["SLACK_BOT_TOKEN"])
+    app = app_factory(client=web_client, token_verification_enabled=False)
 
     @app.event("message")
     def handle_message(event, body, say):
@@ -180,4 +276,5 @@ def create_slack_handler(environ=None, session=None, app_factory=App,
     def cancel_unlock(ack, body, client):
         handle_confirmation(False, ack, body, client)
 
-    return handler_factory(app, values["SLACK_APP_TOKEN"])
+    handler = handler_factory(app, values["SLACK_APP_TOKEN"])
+    return _instrument_websocket_connect(handler)

@@ -71,10 +71,19 @@ if win32serviceutil is not None:
             while True:
                 try:
                     self.slack_handler.connect()
-                    log("ADPilot Slack Socket Mode connected")
+                    if self.slack_handler.client.is_connected():
+                        log("ADPilot Slack Socket Mode connected")
+                    else:
+                        log(
+                            "ADPilot Slack Socket Mode connect attempt ended without an active connection; "
+                            "automatic reconnect remains enabled"
+                        )
                     return
                 except Exception as error:
-                    message = "ADPilot Slack connection failed: {0}".format(error)
+                    error_type = "{0}.{1}".format(
+                        type(error).__module__, type(error).__name__,
+                    )
+                    message = "ADPilot Slack connection attempt failed: {0}".format(error_type)
                     servicemanager.LogErrorMsg(message)
                     log(message)
                     wait_result = win32event.WaitForSingleObject(self.stop_event, 30000)

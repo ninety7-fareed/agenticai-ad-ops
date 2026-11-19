@@ -1,8 +1,15 @@
 import unittest
 from unittest.mock import Mock, patch
+from urllib.request import Request
 from urllib.error import URLError
 
-from slack_integration import create_slack_handler
+from slack_sdk.web import WebClient
+
+from slack_integration import (
+    InstrumentedSlackWebClient,
+    _instrument_websocket_connect,
+    create_slack_handler,
+)
 
 
 SETTINGS = {
@@ -14,8 +21,9 @@ SETTINGS = {
 
 
 class FakeApp:
-    def __init__(self, token, token_verification_enabled=True):
-        self.token = token
+    def __init__(self, client, token_verification_enabled=True):
+        self.client = client
+        self.token = client.token
         self.token_verification_enabled = token_verification_enabled
         self.events = {}
         self.actions = {}
@@ -38,12 +46,18 @@ class SlackIntegrationTests(unittest.TestCase):
         self.session = Mock()
         self.apps = []
 
-        def app_factory(token, token_verification_enabled):
-            app = FakeApp(token, token_verification_enabled)
+        def app_factory(client, token_verification_enabled):
+            app = FakeApp(client, token_verification_enabled)
             self.apps.append(app)
             return app
 
-        self.handler_factory = Mock(return_value="handler")
+        self.socket_client = Mock()
+        self.socket_client.wss_uri = None
+        self.socket_client.issue_new_wss_url.return_value = (
+            "wss://wss-primary.slack.com/link?secret=do-not-log"
+        )
+        self.socket_client.is_connected.return_value = True
+        self.handler_factory = Mock(return_value=Mock(client=self.socket_client))
         self.handler = create_slack_handler(
             SETTINGS, session=self.session, app_factory=app_factory,
             handler_factory=self.handler_factory,
@@ -240,12 +254,76 @@ class SlackIntegrationTests(unittest.TestCase):
             )
 
     def test_creates_socket_mode_handler_using_app_tokens(self):
-        self.assertEqual(self.handler, "handler")
+        self.assertIs(self.handler.client, self.socket_client)
         self.assertFalse(self.app.token_verification_enabled)
         self.handler_factory.assert_called_once()
         app, app_token = self.handler_factory.call_args.args
         self.assertIs(app, self.app)
         self.assertEqual(app_token, "xapp-test")
+        self.assertIsInstance(self.app.client, InstrumentedSlackWebClient)
+
+    def test_socket_mode_url_http_attempt_logs_only_host_stage_and_elapsed(self):
+        entries = []
+        client = InstrumentedSlackWebClient(token="xapp-do-not-log", log_func=entries.append)
+        request = Request("https://slack.com/api/apps.connections.open")
+        response = {"status": 200, "headers": {}, "body": '{"ok": true}'}
+
+        with patch.object(
+            WebClient, "_perform_urllib_http_request_internal",
+            side_effect=[URLError("wss://should-not-be-logged"), response],
+        ) as send:
+            with self.assertRaises(URLError):
+                client._perform_urllib_http_request_internal(
+                    "https://slack.com/api/apps.connections.open", request,
+                )
+            client._perform_urllib_http_request_internal(
+                "https://slack.com/api/apps.connections.open", request,
+            )
+
+        self.assertEqual(send.call_count, 2)
+        self.assertEqual(len(entries), 2)
+        self.assertIn("attempt=1 stage=socket_mode_url", entries[0])
+        self.assertIn("destination_hostname=slack.com", entries[0])
+        self.assertRegex(entries[0], r"elapsed_ms=\d+\.\d")
+        self.assertIn("result=failed", entries[0])
+        self.assertIn("urllib.error.URLError", entries[0])
+        self.assertIn("attempt=2 stage=socket_mode_url", entries[1])
+        self.assertRegex(entries[1], r"elapsed_ms=\d+\.\d")
+        self.assertIn("result=http_200", entries[1])
+        for entry in entries:
+            self.assertNotIn("xapp-do-not-log", entry)
+            self.assertNotIn("wss://", entry)
+
+    def test_websocket_attempt_logs_hostname_without_logging_url(self):
+        entries = []
+        handler = Mock()
+        handler.client = Mock()
+        handler.client.wss_uri = "wss://wss-primary.slack.com/link?secret=do-not-log"
+        handler.client.is_connected.return_value = True
+
+        _instrument_websocket_connect(handler, entries.append)
+        handler.client.connect()
+
+        self.assertEqual(len(entries), 1)
+        self.assertIn("attempt=1 stage=websocket_connect", entries[0])
+        self.assertIn("destination_hostname=wss-primary.slack.com", entries[0])
+        self.assertRegex(entries[0], r"elapsed_ms=\d+\.\d")
+        self.assertIn("result=connected", entries[0])
+        self.assertNotIn("secret", entries[0])
+        self.assertNotIn("/link", entries[0])
+        self.assertNotIn("wss://", entries[0])
+
+    def test_websocket_url_failure_does_not_log_a_websocket_url_or_stage(self):
+        entries = []
+        handler = Mock()
+        handler.client.wss_uri = None
+        handler.client.issue_new_wss_url.side_effect = TimeoutError("request timed out")
+
+        _instrument_websocket_connect(handler, entries.append)
+        with self.assertRaises(TimeoutError):
+            handler.client.connect()
+
+        self.assertEqual(entries, [])
 
 
 if __name__ == "__main__":
